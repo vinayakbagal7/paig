@@ -1,4 +1,6 @@
 from fastapi import APIRouter
+
+from api.guardrails.routers import paig_guardrails_router
 from api.user.routers import user_router
 from api.authz.routers import authz_router
 from api.encryption.routers import encryption_router
@@ -20,5 +22,6 @@ router.include_router(user_router, prefix="/account-service", tags=["User"])
 router.include_router(authz_router, prefix="/authz-service/api", tags=["Authorization"])
 router.include_router(data_service_router, prefix="/data-service", tags=["Data Service"])
 router.include_router(shield_router, prefix="/shield", tags=["Shield"])
+router.include_router(paig_guardrails_router, prefix="/guardrail-service/api")
 
 __all__ = ["router"]
