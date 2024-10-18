@@ -1,9 +1,7 @@
 import threading
 import uuid
-import fasteners
-import pytz
+
 from sqlalchemy import func
-from passlib.context import CryptContext
 
 from core.exceptions.error_messages_parser import get_error_message, ERROR_FIELD_REQUIRED, ERROR_FIELD_LENGTH_EXCEEDS, \
     ERROR_INVALID_STATUS, ERROR_FIELD_VALUE_INVALID
@@ -12,8 +10,6 @@ from .exceptions import BadRequestException
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 import os
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def recursive_merge_dicts(dict1, dict2):
@@ -27,6 +23,14 @@ def recursive_merge_dicts(dict1, dict2):
 
     return result
 
+pwd_context = None
+
+def get_or_create_pwd_context():
+    global pwd_context
+    if pwd_context is None:
+        from passlib.context import CryptContext
+        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    return pwd_context
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -62,6 +66,7 @@ def validate_boolean(status: int, field: str):
 
 
 def current_utc_time():
+    import pytz
     return datetime.now().astimezone(pytz.utc)
 
 
@@ -160,6 +165,7 @@ def get_interval(from_time, to_time):
 
 
 def acquire_lock(lock_file_path):
+    import fasteners
     lock = fasteners.InterProcessLock(lock_file_path)
     gotten = None
     if lock_file_path:
