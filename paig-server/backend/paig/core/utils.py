@@ -22,7 +22,9 @@ def recursive_merge_dicts(dict1, dict2):
 
     return result
 
+
 pwd_context = None
+
 
 def get_or_create_pwd_context():
     global pwd_context
@@ -31,11 +33,14 @@ def get_or_create_pwd_context():
         pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     return pwd_context
 
+
 def verify_password(plain_password, hashed_password):
+    pwd_context = get_or_create_pwd_context()
     return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password):
+    pwd_context = get_or_create_pwd_context()
     return pwd_context.hash(password)
 
 
@@ -162,6 +167,7 @@ def get_interval(from_time, to_time):
     else:
         return "month"
 
+
 def acquire_lock(lock_file_path):
     import fasteners
     lock = fasteners.InterProcessLock(lock_file_path)
@@ -183,7 +189,6 @@ class Singleton:
         else:
             self._initialized = True
             return False
-
 
 
 global_instances = {}
@@ -231,6 +236,7 @@ def is_jupyter_notebook():
     except:
         return False
 
+
 def is_colab():
     try:
         import google.colab
@@ -241,6 +247,7 @@ def is_colab():
     except ImportError:
         return False
     return True
+
 
 def is_docker():
     return os.path.exists('/.dockerenv')
