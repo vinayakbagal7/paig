@@ -102,7 +102,7 @@ class BaseController(Generic[ModelType, ViewType]):
         if model is not None:
             if exclude_fields is None:
                 exclude_fields = set()
-            exclude_fields.update({"create_time", "update_time"})
+            exclude_fields.update({"id", "create_time", "update_time"})
             updated_data = v_request.model_dump(exclude_unset=True, exclude=exclude_fields)
             model.set_attribute(updated_data)
             return await self.repository.update_record(model)
