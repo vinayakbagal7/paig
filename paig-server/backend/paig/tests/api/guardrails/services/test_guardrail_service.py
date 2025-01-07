@@ -439,6 +439,7 @@ async def test_create_guardrail_when_guardrail_provider_gives_error(
 async def test_create_guardrail_when_guardrail_provider_does_not_give_success(
         guardrail_service, mock_guardrail_repository, mock_guardrail_application_repository,
         mock_guardrail_app_version_repository, mock_gr_config_repository, mock_guardrail_connection_service):
+    create_guardrail = GuardrailView(**guardrail_view_json)
     create_guardrail_view = GuardrailView(**guardrail_view_json)
     create_guardrail_config_view = GRConfigView(**guardrail_config_json)
 
@@ -451,7 +452,7 @@ async def test_create_guardrail_when_guardrail_provider_does_not_give_success(
     gr_config_model = GRConfigModel(**create_guardrail_config_view.model_dump())
 
     with (patch.object(
-            mock_guardrail_repository, 'create_record', return_value=guardrail_view
+            mock_guardrail_repository, 'create_record', return_value=create_guardrail
     ) as mock_guardrail_create_record, patch.object(
         mock_guardrail_repository, 'list_records', return_value=(None, 0)
     ) as mock_guardrail_get_by_name, patch.object(
@@ -466,10 +467,16 @@ async def test_create_guardrail_when_guardrail_provider_does_not_give_success(
         GuardrailProviderManager, 'create_guardrail', return_value={"AWS": {"success": False, "response": {"details": "AWS Error"}}}
     ) as mock_bedrock_guardrail_create):
         # Call the method under test
-        with pytest.raises(InternalServerError) as exc_info:
-            await guardrail_service.create(create_guardrail_view)
+        result = await guardrail_service.create(create_guardrail_view)
 
         # Assertions
+        assert result.id == 1
+        assert result.status == 2
+        assert result.name == create_guardrail_view.name
+        assert result.guardrail_configs == create_guardrail_view.guardrail_configs
+        assert result.application_keys == create_guardrail_view.application_keys
+        assert result.guardrail_provider == create_guardrail_view.guardrail_provider
+        assert result.guardrail_connection_name == create_guardrail_view.guardrail_connection_name
         assert mock_guardrail_create_record.called
         assert mock_guardrail_get_by_name.called
         assert mock_gr_app_create_record.called
@@ -477,9 +484,6 @@ async def test_create_guardrail_when_guardrail_provider_does_not_give_success(
         assert mock_gr_config_create_record.called
         assert mock_gr_connection_get_all.called
         assert mock_bedrock_guardrail_create.called
-        assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to create guardrail in external service for provider AWS"
-        assert exc_info.value.details == "AWS Error"
 
 
 @pytest.mark.asyncio
@@ -977,6 +981,7 @@ async def test_update_guardrail_when_guardrail_provider_does_not_gives_success(
         guardrail_service, mock_guardrail_repository, mock_guardrail_application_repository,
         mock_guardrail_app_version_repository, mock_gr_config_repository, mock_guardrail_connection_service,
         mock_gr_provider_response_repository):
+    existing_guardrail_view = GuardrailView(**guardrail_view_json)
     update_guardrail_view = GuardrailView(**guardrail_view_json)
 
     guardrail_model = GuardrailModel()
@@ -1012,7 +1017,7 @@ async def test_update_guardrail_when_guardrail_provider_does_not_gives_success(
     with (patch.object(
             mock_guardrail_repository, 'get_record_by_id', return_value=guardrail_model
     ) as mock_get_record_by_id, patch.object(
-        mock_guardrail_repository, 'list_records', return_value=([guardrail_view], 1)
+        mock_guardrail_repository, 'list_records', return_value=([existing_guardrail_view], 1)
     ) as mock_guardrail_get_by_name, patch.object(
         mock_guardrail_repository, 'update_record', return_value=update_guardrail_view
     ) as mock_guardrail_update_record, patch.object(
@@ -1041,13 +1046,18 @@ async def test_update_guardrail_when_guardrail_provider_does_not_gives_success(
         mock_gr_provider_response_repository, 'get_all', return_value=[gr_provider_response_model]
     ) as mock_gr_provider_response_get_all):
         # Call the method under test
-        with pytest.raises(InternalServerError) as exc_info:
-            await guardrail_service.update(1, update_guardrail_view)
+        result = await guardrail_service.update(1, update_guardrail_view)
 
         # Assertions
-        assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to update guardrail in provider AWS"
-        assert exc_info.value.details == "AWS Error"
+        assert result.id == 1
+        assert result.status == 2
+        assert result.name == update_guardrail_view.name
+        assert result.guardrail_configs == update_guardrail_view.guardrail_configs
+        assert result.application_keys == update_guardrail_view.application_keys
+        assert result.guardrail_provider == update_guardrail_view.guardrail_provider
+        assert result.guardrail_connection_name == update_guardrail_view.guardrail_connection_name
+        assert result.guardrail_connection_details == update_guardrail_view.guardrail_connection_details
+        assert result.guardrail_provider_response == update_guardrail_view.guardrail_provider_response
         assert mock_guardrail_update_record.called
         assert mock_get_record_by_id.called
         assert mock_guardrail_get_by_name.called

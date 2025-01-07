@@ -22,7 +22,7 @@ from core.controllers.base_controller import BaseController
 from core.controllers.paginated_response import Pageable
 from core.exceptions import BadRequestException, NotFoundException, InternalServerError
 from core.exceptions.error_messages_parser import get_error_message, ERROR_RESOURCE_ALREADY_EXISTS, \
-    ERROR_RESOURCE_NOT_FOUND, ERROR_FIELD_REQUIRED
+    ERROR_RESOURCE_NOT_FOUND, ERROR_FIELD_REQUIRED, ERROR_INVALID_STATUS
 from core.utils import validate_id, validate_string_data, validate_boolean, SingletonDepends
 
 config = load_config_file()
@@ -87,7 +87,9 @@ class GuardrailRequestValidator:
         Args:
             status (int): The status of the Guardrail.
         """
-        validate_boolean(status, "Guardrail status")
+        if status:
+            if status < 0 or status > 2:
+                raise BadRequestException(get_error_message(ERROR_INVALID_STATUS, "Guardrail status", status))
 
     async def validate_read_request(self, id: int):
         """
@@ -313,6 +315,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             gr_conf = await self.gr_config_repository.create_record(gr_config_model)
             guardrails_configs_list.append(GRConfigView.model_validate(gr_conf))
 
+        result = GuardrailView(**request.dict())
+        result.id = guardrail.id
+        result.status = guardrail.status
+        result.create_time = guardrail.create_time
+        result.update_time = guardrail.update_time
+
         if request.guardrail_connection_name is not None and request.guardrail_provider is not None:
             # Get Guardrail Connections
             guardrail_connections = await self._get_guardrail_connections_by_name(request.guardrail_connection_name)
@@ -323,13 +331,10 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             guardrail_configs_to_create = GuardrailTransformer.transform(guardrail.guardrail_provider, guardrails_configs_list)
 
             # Create Guardrails in end service and save the Responses
-            await self._create_guardrail_to_external_provider(guardrail, guardrail_connections, guardrail_configs_to_create)
-
-        result = GuardrailView(**request.dict())
-        result.id = guardrail.id
-        result.status = guardrail.status
-        result.create_time = guardrail.create_time
-        result.update_time = guardrail.update_time
+            response = await self._create_guardrail_to_external_provider(guardrail, guardrail_connections, guardrail_configs_to_create)
+            if guardrail.status == 2:
+                result.status = guardrail.status
+                result.guardrail_provider_response = response[request.guardrail_provider.name]
 
         return result
 
@@ -394,6 +399,7 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             encryption_key = await self.guardrail_connection_service.get_encryption_key()
             result.guardrail_connection_details["encryption_key_id"] = encryption_key.id
 
+        if extended or result.status == 2:
             # Fetch Guardrail Provider Responses by Guardrail IDs
             gr_response = await self.gr_provider_response_repository.get_all(filters={"guardrail_id": id})
             result.guardrail_provider_response = gr_response[0].response_data if gr_response else None
@@ -457,6 +463,8 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
 
         # Iterate over the guardrails and process them
         for guardrail in guardrails:
+            if guardrail.status != 1:
+                continue
             # Validate and get the GuardrailView object
             guardrail_id = guardrail.guardrail_id
 
@@ -631,6 +639,8 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         response_to_delete_guardrail = {}
 
         # Prepare config maps for existing and updated configurations
+        if existing_guardrail.status != 1 and guardrail.status != 1:
+            return
         if existing_guardrail.guardrail_provider is None and request.guardrail_provider is None:
             return
 
@@ -676,7 +686,7 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         # Delete guardrails in end service
         if gr_connections_to_delete and existing_guardrail_configs:
             await self._delete_guardrail_to_external_provider(
-                guardrail, gr_connections_to_delete, existing_guardrail_configs, response_to_delete_guardrail)
+                existing_guardrail, gr_connections_to_delete, existing_guardrail_configs, response_to_delete_guardrail)
 
         # Create guardrails in end service and save the responses
         if gr_connections_to_create and new_guardrails_configs:
@@ -689,19 +699,27 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 guardrail, gr_connections_to_update, new_guardrails_configs, response_to_update_guardrail)
             guardrail_response.update(gr_resp_data)
 
+        if guardrail.status == 2:
+            guardrail.guardrail_provider_response = guardrail_response[guardrail.guardrail_provider.name]
         return guardrail_response
 
     async def _delete_guardrail_to_external_provider(self, guardrail, guardrail_connections,
                                                      guardrails_configs, resp_data):
+        response_data = resp_data[guardrail.guardrail_provider.name].response_data
+        if guardrail.status == 2 and 'previousResponse' not in response_data:
+            return resp_data
         try:
             delete_guardrail_map = {}
             for provider, configs in guardrails_configs.items():
+                prev_resp = resp_data[provider].response_data
+                if 'previousResponse' in resp_data[provider].response_data:
+                    prev_resp = resp_data[provider].response_data['previousResponse']
                 delete_bedrock_guardrails_request = DeleteGuardrailRequest(
                     name=self.replace_invalid_chars(guardrail.name),
                     description=guardrail.description,
                     connectionDetails=guardrail_connections[provider].connection_details,
                     guardrailConfigs=configs,
-                    remoteGuardrailDetails=resp_data[provider].response_data
+                    remoteGuardrailDetails=prev_resp
                 )
                 delete_guardrail_map[provider] = delete_bedrock_guardrails_request
             delete_guardrail_response = GuardrailProviderManager.delete_guardrail(delete_guardrail_map)
@@ -710,6 +728,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
 
         for provider, response in delete_guardrail_response.items():
             if not response['success']:
+                if ('errorType' in response['response']['details'] and
+                        response['response']['details']['errorType'] == 'ResourceNotFoundException'):
+                    continue
                 raise InternalServerError(f"Failed to delete guardrail in provider {provider}",
                                           response['response']['details'])
             gr_resp_model = resp_data.get(provider)
@@ -722,12 +743,15 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         try:
             update_guardrail_map = {}
             for provider, configs in guardrails_configs.items():
+                prev_resp = resp_data[provider].response_data
+                if 'previousResponse' in resp_data[provider].response_data:
+                    prev_resp = resp_data[provider].response_data['previousResponse']
                 update_bedrock_guardrails_request = UpdateGuardrailRequest(
                     name=self.replace_invalid_chars(guardrail.name),
                     description=guardrail.description,
                     connectionDetails=guardrail_connections[provider].connection_details,
                     guardrailConfigs=configs,
-                    remoteGuardrailDetails=resp_data[provider].response_data
+                    remoteGuardrailDetails=prev_resp
                 )
                 update_guardrail_map[provider] = update_bedrock_guardrails_request
             update_guardrail_response = GuardrailProviderManager.update_guardrail(update_guardrail_map)
@@ -735,12 +759,17 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             raise InternalServerError(f"Failed to update guardrails. Error - {e.__str__()}")
 
         for provider, response in update_guardrail_response.items():
-            if not response['success']:
-                raise InternalServerError(
-                    f"Failed to update guardrail in provider {provider}",
-                    response['response']['details'])
+            resp_to_update = response
             gr_resp_model = resp_data.get(provider)
-            gr_resp_model.response_data = response
+            if not response['success']:
+                guardrail.status = 2
+                await self.update_record(guardrail.id, GuardrailView(id=guardrail.id, status=2))
+                if gr_resp_model.response_data['success']:
+                    resp_to_update['previousResponse'] = gr_resp_model.response_data
+                else:
+                    if 'previousResponse' in gr_resp_model.response_data:
+                        resp_to_update['previousResponse'] = gr_resp_model.response_data['previousResponse']
+            gr_resp_model.response_data = resp_to_update
             await self.gr_provider_response_repository.update_record(gr_resp_model)
         return update_guardrail_response
 
@@ -778,9 +807,8 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
 
         for provider, response in create_guardrail_response.items():
             if not response['success']:
-                raise InternalServerError(
-                    f"Failed to create guardrail in external service for provider {provider}",
-                    response['response']['details'])
+                guardrail.status = 2
+                await self.update_record(guardrail.id, GuardrailView(id=guardrail.id, status=2))
             gr_resp_model = GRProviderResponseModel(guardrail_id=guardrail.id, guardrail_provider=provider,
                                                     response_data=response)
             await self.gr_provider_response_repository.create_record(gr_resp_model)
