@@ -1,5 +1,6 @@
 import asyncio
 import sys, os
+from multiprocessing import Process
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(ROOT_DIR)
@@ -150,12 +151,22 @@ def start_server(host, port, background, workers):
 
     if not background:
         print('Starting PAIG Server in foreground mode')
-        uvicorn.run(
-            app="server:app",
-            host=host,
-            port=port,
-            workers=workers,
-        )
+        # Start Celery worker in a separate process
+        celery_process = Process(target=start_celery_worker)
+        celery_process.start()
+
+        try:
+            # Start the FastAPI app
+            uvicorn.run(
+                app="server:app",
+                host=host,
+                port=port,
+                workers=workers,
+            )
+        finally:
+            # Ensure the Celery worker process is terminated when FastAPI stops
+            celery_process.terminate()
+            celery_process.join()
     else:
         print('Starting PAIG Server in background mode')
         process = subprocess.Popen(
@@ -166,44 +177,130 @@ def start_server(host, port, background, workers):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
+        # Start the Celery worker as a background process
+        celery_process = subprocess.Popen(
+            [
+                sys.executable, "-m", "celery", "-A", "celery_app_pk.celery_app_st.celery_app", "worker",
+                "--loglevel=info",
+                "--concurrency=4",
+            ],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Save PIDs for both processes
         with open(PID_FILE, "w") as f:
-            f.write(str(process.pid))
+            f.write(f"{process.pid}\n{celery_process.pid}\n")
+
         print(f"Server started in background with PID {process.pid}")
+        print(f"Celery worker started in background with PID {celery_process.pid}")
         print(f"PAIG Server is running on http://{host}:{port}")
 
 
 def is_server_running():
-    """Check if the server is already running based on the PID file."""
+    """Check if the server or Celery worker is already running based on the PID file."""
     if os.path.exists(PID_FILE):
         try:
             with open(PID_FILE, "r") as f:
-                pid = int(f.read().strip())
-            # Check if the PID belongs to a process with the expected command
+                pids = [int(pid.strip()) for pid in f.readlines()]  # Read multiple PIDs
+            valid_pids = []
             import psutil
-            if psutil.pid_exists(pid):
-                process = psutil.Process(pid)
-                cmdline = " ".join(process.cmdline())
-                if "uvicorn" in cmdline and "server:app" in cmdline:
-                    return pid  # Server process is running
-            # If PID file exists but process is not our server, remove stale file
-            os.remove(PID_FILE)
+            for pid in pids:
+                if psutil.pid_exists(pid):
+                    process = psutil.Process(pid)
+                    cmdline = " ".join(process.cmdline())
+                    # Check if the PID belongs to a process with the expected command line
+                    if ("uvicorn" in cmdline and "server:app" in cmdline) or "celery" in cmdline:
+                        valid_pids.append(pid)
+            if valid_pids:
+                return valid_pids  # Return list of valid PIDs
+            os.remove(PID_FILE)  # Remove stale PID file if no valid processes
         except (ValueError, ProcessLookupError, PermissionError, psutil.Error):
             print("PID file is invalid or inaccessible")
-            os.remove(PID_FILE)  # PID file is invalid or inaccessible
-    return False
+            os.remove(PID_FILE)
+    return []
 
 
 def stop_server():
-    pid = is_server_running()
-    if pid:
-        try:
-            os.kill(pid, signal.SIGTERM)
-            os.remove(PID_FILE)
-            print(f"PAIG Server with PID {pid} stopped.")
-        except Exception as err:
-            print(f"Error occurred while stopping process with id {pid}")
+    pids = is_server_running()  # Get list of running PIDs
+    if pids:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)  # Send termination signal
+                print(f"Process with PID {pid} stopped.")
+            except Exception as err:
+                print(f"Error occurred while stopping process with PID {pid}: {err}")
+        os.remove(PID_FILE)  # Clean up the PID file
+        print("All processes stopped, and PID file removed.")
     else:
-        print("No server is currently running.")
+        print("No server or worker processes are currently running.")
+
+
+def start_celery_worker():
+    """
+    Start the Celery worker programmatically.
+    """
+    # Command to start the Celery worker in a subprocess
+    command = [
+        sys.executable,  # Use the current Python interpreter
+        "-m", "celery",  # Run Celery as a module
+        "-A", "celery_app_pk.celery_app_st.celery_app",  # Specify the Celery app
+        "worker",  # Start the worker
+        "--loglevel=info",  # Set log level
+        "--queues=celery,queue1,queue2", # Specify queues (adjust as needed)
+        "--concurrency=4",  # Set concurrency (adjust as needed)
+        "--logfile=logs/celery_worker.log",
+    ]
+
+    # Start the worker in a subprocess
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Start the worker in a subprocess
+    # process = subprocess.Popen(
+    #     command,
+    #     stdout=subprocess.PIPE,  # Capture standard output
+    #     stderr=subprocess.PIPE,  # Capture error output
+    #     universal_newlines=True,  # Decode output to strings
+    # )
+
+    # Optionally, capture and log output if necessary
+    stdout, stderr = process.communicate()
+    if stdout:
+        print(stdout.decode())
+    if stderr:
+        print(stderr.decode())
+
+    # Display logs in real time
+    # print("Starting Celery worker...")
+    # try:
+    #     while True:
+    #         output = process.stdout.readline()
+    #         if output == "" and process.poll() is not None:
+    #             break
+    #         if output:
+    #             print(output.strip())  # Print each line of the log
+    # except KeyboardInterrupt:
+    #     print("Stopping Celery worker...")
+    #     process.terminate()
+    #     process.wait()
+
+    return process
+
+
+# def start_celery_worker():
+#     celery_process = subprocess.Popen(
+#         [
+#             sys.executable, "-m", "celery", "-A", "celery_app_pk.celery_app_st.celery_app", "worker",
+#             "--loglevel=info",
+#             "--concurrency=4",
+#         ],
+#         start_new_session=True,
+#         stdout=subprocess.DEVNULL,
+#         stderr=subprocess.DEVNULL,
+#     )
+#
+#     return celery_process
 
 
 if __name__ == "__main__":
