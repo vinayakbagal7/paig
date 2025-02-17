@@ -1,14 +1,14 @@
-name: paig-securechat-ci
+name: paig-evaluation-ci
 
 on:
   push:
     branches: [ "main" ]
     paths:
-      - 'paig-securechat/**'
+      - 'paig-evaluation/**'
   pull_request:
     branches: [ "main" ]
     paths:
-      - 'paig-securechat/**'
+      - 'paig-evaluation/**'
   workflow_dispatch: # Allows manual trigger
 
 permissions:
@@ -41,12 +41,12 @@ jobs:
         python3 -m pip install virtualenv
         virtualenv -p python3 venv && . venv/bin/activate
         pip install twine build pytest pytest-cov
-        pip install -r paig-securechat/web-server/requirements.txt
+        pip install -r paig-evaluation/paig_evaluation/requirements.txt
 
     - name: Test with pytest
       run: |
         filepath=$PWD
-        . venv/bin/activate && cd paig-securechat/web-server/src/paig_securechat
+        . venv/bin/activate && cd paig-evaluation
         python3 -m pytest --cov="." --cov-report term --cov-report xml:$filepath/coverage-${{ env.SANITIZED_BRANCH_NAME }}.xml --junitxml=$filepath/junit-${{ env.SANITIZED_BRANCH_NAME }}.xml tests
 
     - name: Upload coverage report
@@ -61,21 +61,10 @@ jobs:
         name: junit-results-${{ env.SANITIZED_BRANCH_NAME }}
         path: junit-${{ env.SANITIZED_BRANCH_NAME }}.xml
 
-    - name: Install Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-        registry-url: https://registry.npmjs.org/
-
-    - name: Install Node.js dependencies, build UI and copy sales data
-      run: |
-        cd paig-securechat/scripts
-        sh build_ui.sh
-
     - name: Set build version to dev
       id: version
       run: |
-        FILE=paig-securechat/web-server/src/paig_securechat/VERSION
+        FILE=paig-evaluation/paig_evaluation/VERSION
         VERSION=$(awk -F= '{gsub(/^[ \t]+|[ \t]+$/, "", $2); gsub(/^['\''"]+|['\''"]+$/, "", $2); print $2}' $FILE)
         DEV_VERSION="${VERSION}+${SANITIZED_BRANCH_NAME}$(date +%Y%m%d%H%M%S)"
         echo "__version__ = '${DEV_VERSION}'" > $FILE
@@ -83,18 +72,19 @@ jobs:
     - name: Build the wheel
       run: |
         . venv/bin/activate
-        cd paig-securechat
+        cd paig-evaluation
         python3 -m build -w
+        cd ..
 
     - name: Install created package
       run: |
           rm -rf venv
           virtualenv -p python3 venv && . venv/bin/activate
-          cd paig-securechat
+          cd paig-evaluation
           pip install dist/*.whl
 
     - name: Upload python package
       uses: actions/upload-artifact@v4
       with:
-        name: paig-securechat-${{ env.SANITIZED_BRANCH_NAME }}-build
-        path: paig-securechat/dist/*.whl
+        name: paig-evaluation-${{ env.SANITIZED_BRANCH_NAME }}-build
+        path: paig-evaluation/dist/*.whl
