@@ -9,7 +9,6 @@ All changes to paig-server will be documented in this file.
 ### Changed
 - Optimized validation errors for guardrails
 - Fixed guardrails UI to Allow updating offtopic, denied terms and regex
-- Updated paig-authorizer-core version to 0.0.2
 
 ## [v0.0.6] - 2025-03-17
 ### Added
