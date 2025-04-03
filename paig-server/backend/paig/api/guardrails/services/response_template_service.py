@@ -1,7 +1,8 @@
 from typing import List
 
+from core.config import load_config_json
 from core.controllers.base_controller import BaseController
-from core.controllers.paginated_response import Pageable
+from core.controllers.paginated_response import Pageable, create_pageable_response
 from core.exceptions import BadRequestException
 from core.exceptions.error_messages_parser import (get_error_message, ERROR_RESOURCE_ALREADY_EXISTS)
 from core.utils import validate_id, validate_string_data, SingletonDepends
@@ -160,12 +161,53 @@ class ResponseTemplateService(BaseController[ResponseTemplateModel, ResponseTemp
         Returns:
             Pageable: A paginated response containing ResponseTemplate view objects and other fields.
         """
-        return await self.list_records(
+
+        # Load predefined templates
+        predefined_templates = load_config_json("api/guardrails/conf/predefined_response_templates.json")
+
+        # Convert predefined templates to ResponseTemplateView objects and apply filters
+        predefined_response_templates = [
+            ResponseTemplateView(response=template["response"], description=template["description"])
+            for template in predefined_templates
+            if self._matches_filter(template["response"], filter.response, filter.exact_match) and
+            self._matches_filter(template["description"], filter.description, filter.exact_match)
+        ]
+
+        # Fetch database records
+        db_response_templates, total_count = await self.repository.list_records(
             filter=filter,
             page_number=page_number,
             size=size,
             sort=sort
         )
+
+        # Combine predefined and database records
+        all_records = predefined_response_templates + db_response_templates
+
+        # Apply pagination
+        paginated_records = self.get_paginated_records(all_records, page_number, size)
+
+        # Calculate total count
+        total_count += len(paginated_records)
+
+        return create_pageable_response(
+            content=paginated_records,
+            total_elements=total_count,
+            page_number=page_number,
+            size=size,
+            sort=sort
+        )
+
+    def get_paginated_records(self, all_records, page_number, size):
+        start_idx = page_number * size
+        end_idx = min(start_idx + size, len(all_records))  # Prevents out-of-range slicing
+        paginated_records = all_records[start_idx:end_idx]
+        return paginated_records
+
+    def _matches_filter(self, actual_val: str, filter_val: str, exact_match: bool) -> bool:
+        if filter_val:
+            return filter_val == actual_val if exact_match else filter_val.lower() in actual_val.lower()
+        return True
 
     async def create_response_template(self, request: ResponseTemplateView) -> ResponseTemplateView:
         """
