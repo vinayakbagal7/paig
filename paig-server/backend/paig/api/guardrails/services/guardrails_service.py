@@ -502,11 +502,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             return result
             
         except Exception as e:
-            # Error metrics
+            # Error metrics with exception type
             self.guardrail_operations_total.add(1, {
                 "operation": "create", 
                 "status": "error", 
                 "provider": provider_name,
+                "error_type": type(e).__name__,
                 "tenant_id": str(get_tenant_id())
             })
             raise
@@ -687,11 +688,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             return guardrail_view
             
         except Exception as e:
-            # Error metrics
+            # Error metrics with exception type
             self.guardrail_operations_total.add(1, {
                 "operation": "update", 
                 "status": "error", 
                 "provider": provider_name,
+                "error_type": type(e).__name__,
                 "tenant_id": str(get_tenant_id())
             })
             raise
@@ -827,11 +829,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 })
                 
             except Exception as e:
-                # Error metrics for provider operation
+                # Error metrics with exception type
                 self.provider_operations_total.add(1, {
                     "provider": provider,
                     "operation": "delete", 
                     "status": "error",
+                    "error_type": type(e).__name__,
                     "tenant_id": str(get_tenant_id())
                 })
                 raise InternalServerError(f"Failed to delete guardrails for provider {provider}. Error - {e.__str__()}")
@@ -877,11 +880,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 })
                 
             except Exception as e:
-                # Error metrics for provider operation
+                # Error metrics with exception type
                 self.provider_operations_total.add(1, {
                     "provider": provider,
                     "operation": "update", 
                     "status": "error",
+                    "error_type": type(e).__name__,
                     "tenant_id": str(get_tenant_id())
                 })
                 raise InternalServerError(f"Failed to update guardrails for provider {provider}. Error - {e.__str__()}")
@@ -938,11 +942,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 })
                 
             except Exception as e:
-                # Error metrics for provider operation
+                # Error metrics with exception type
                 self.provider_operations_total.add(1, {
                     "provider": provider,
                     "operation": "create", 
                     "status": "error",
+                    "error_type": type(e).__name__,
                     "tenant_id": str(get_tenant_id())
                 })
                 raise InternalServerError(f"Failed to create guardrails for provider {provider}. Error - {e.__str__()}")
@@ -1084,11 +1089,12 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             })
             
         except Exception as e:
-            # Error metrics
+            # Error metrics with exception type
             self.guardrail_operations_total.add(1, {
                 "operation": "delete", 
                 "status": "error", 
                 "provider": provider_name,
+                "error_type": type(e).__name__,
                 "tenant_id": str(get_tenant_id())
             })
             raise
