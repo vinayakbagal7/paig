@@ -36,18 +36,21 @@ class FluentdRestHttpClient(BaseRESTHttpClient):
 
         return {"x-paig-api-key": paig_key}
 
-    def log_message(self, message: str):
+    def log_message(self, message: str, return_response: bool = False):
         """
         Sends a log message to the Fluentd service.
 
         Args:
             message (str): The message to be logged.
+            return_response (bool): Whether to return the response. Default is False.
+
+        Returns:
+            Response: The HTTP response if return_response is True.
 
         Raises:
             ShieldException: If an error occurs while logging the message.
         """
-
-        logger.debug(f"Using base-url={self.baseUrl} , tag={self.audit_tag} and logging message {message}")
+        logger.debug(f"Using base-url={self.baseUrl}, tag={self.audit_tag} and logging message {message}")
         try:
             response = self.post(
                 url="/" + self.audit_tag,
@@ -59,7 +62,10 @@ class FluentdRestHttpClient(BaseRESTHttpClient):
                 logger.debug(f"Successfully logged message: {message}")
             else:
                 logger.error(f"Failed to log message: {message} with response: {response.__str__()}")
-                raise ShieldException(f"Failed to log message: {message} with response: {response.__str__()}")
+                if not return_response:
+                    raise ShieldException(f"Failed to log message: {message} with response: {response.__str__()}")
+            return response
+            
         except Exception as ex:
             logger.error(f"Failed to log message: {message} with error: {ex}")
             raise ShieldException(f"Failed to log message: {message} with error: {ex}")
