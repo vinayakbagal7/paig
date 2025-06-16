@@ -417,7 +417,7 @@ async def test_create_guardrail_when_guardrail_provider_gives_error(
         assert mock_gr_connection_get_all.called
         assert mock_bedrock_guardrail_create.called
         assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to create guardrails. Error - AWS Error"
+        assert exc_info.value.message == "Failed to create guardrails for provider AWS. Error - AWS Error"
 
 
 @pytest.mark.asyncio
@@ -684,7 +684,7 @@ async def test_update_guardrail_when_guardrail_provider_gives_error(guardrail_se
 
         # Assertions
         assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to update guardrails. Error - AWS Error"
+        assert exc_info.value.message == "Failed to update guardrails for provider AWS. Error - AWS Error"
         assert mock_get_record_by_id.called
         assert mock_guardrail_get_by_name.called
         assert mock_gr_connection_get_all.called
@@ -775,7 +775,7 @@ async def test_delete_guardrail_when_guardrail_provider_gives_error(
 
         # Assertions
         assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to delete guardrails. Error - AWS Error"
+        assert exc_info.value.message == "Failed to delete guardrails for provider AWS. Error - AWS Error"
         assert mock_get_record_by_id.called
         assert mock_guardrail_provider_manager.called
         assert mock_gr_connection_get_all.called
