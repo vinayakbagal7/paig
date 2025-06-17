@@ -1,6 +1,7 @@
 import copy
 import re
 import time
+from http import HTTPStatus
 from typing import List
 
 import sqlalchemy
@@ -24,13 +25,14 @@ from api.guardrails.transformers.guardrail_transformer import GuardrailTransform
 from core.config import load_config_file, load_config_json
 from core.controllers.base_controller import BaseController
 from core.controllers.paginated_response import Pageable, create_pageable_response
-from core.exceptions import BadRequestException, NotFoundException, InternalServerError
+from core.exceptions import BadRequestException, NotFoundException, InternalServerError, CustomException
 from core.exceptions.error_messages_parser import get_error_message, ERROR_RESOURCE_ALREADY_EXISTS, \
     ERROR_RESOURCE_NOT_FOUND, ERROR_FIELD_REQUIRED
 from core.middlewares.request_session_context_middleware import get_user, get_tenant_id
 from core.utils import validate_id, validate_string_data, validate_boolean, SingletonDepends, \
     generate_unique_identifier_key, normalize_datetime, current_utc_time_epoch
 
+STATUS_SUCCESS = "success"
 DEFAULT_PROVIDER = "PAIG"
 
 SAMPLE_PHRASES_MAX_COUNT = 5
@@ -334,41 +336,23 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         
         # Initialize OpenTelemetry metrics
         self.meter = get_meter(__name__)
-        
-        self.guardrail_operations_total = self.meter.create_counter(
-            name='guardrail_operations_total',
-            description='Total guardrail operations',
-            unit='1'
-        )
-        
-        self.guardrail_operation_duration = self.meter.create_histogram(
-            name='guardrail_operation_duration',
-            description='Duration of guardrail operations',
-            unit='s'
-        )
-        
+
         self.active_guardrails = self.meter.create_up_down_counter(
             name='active_guardrails_total',
             description='Number of active guardrails',
             unit='1'
         )
-        
-        self.provider_operations_total = self.meter.create_counter(
-            name='guardrail_provider_operations_total',
-            description='Total external provider operations',
-            unit='1'
-        )
-        
-        self.provider_response_time = self.meter.create_histogram(
-            name='guardrail_provider_response_time',
-            description='External provider response time',
+
+        self.guardrail_operation_duration = self.meter.create_histogram(
+            name='guardrail_operation_duration',
+            description='Duration of guardrail operations',
             unit='s'
         )
-        
-        self.provider_errors_total = self.meter.create_counter(
-            name='guardrail_provider_errors_total',
-            description='Provider-specific errors',
-            unit='1'
+
+        self.http_outgoing_request = self.meter.create_histogram(
+            name="guardrails_http_outgoing_request",
+            description="Guardrails outgoing HTTP requests",
+            unit="s"
         )
 
     def get_repository(self) -> GuardrailRepository:
@@ -442,6 +426,8 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             GuardrailView: The created Guardrail view object.
         """
         start_time = time.time()
+        status = STATUS_SUCCESS
+        error_type = None
         provider_name = request.guardrail_provider.name if request.guardrail_provider else DEFAULT_PROVIDER
         try:
             # Validate the create request
@@ -485,14 +471,6 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             result.create_time = guardrail.create_time
             result.update_time = guardrail.update_time
 
-            # Success metrics
-            self.guardrail_operations_total.add(1, {
-                "operation": "create", 
-                "status": "success", 
-                "provider": provider_name,
-                "tenant_id": str(get_tenant_id())
-            })
-
             # Increment active guardrails count
             self.active_guardrails.add(1, {
                 "provider": provider_name,
@@ -502,15 +480,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             return result
             
         except Exception as e:
-            # Error metrics with exception type
-            self.guardrail_operations_total.add(1, {
-                "operation": "create", 
-                "status": "error", 
-                "provider": provider_name,
-                "error_type": type(e).__name__,
-                "tenant_id": str(get_tenant_id())
-            })
-            raise
+            status = "error"
+            error_type = type(e).__name__
+            raise e
             
         finally:
             # Duration metrics
@@ -518,7 +490,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             self.guardrail_operation_duration.record(duration, {
                 "operation": "create", 
                 "provider": provider_name,
-                "tenant_id": str(get_tenant_id())
+                "tenant_id": get_tenant_id(),
+                "result": status,
+                "error_type": error_type
             })
 
     def prepare_audit_log_object(self, action: str, guardrail: GuardrailView = None, previous_guardrail: GuardrailView = None):
@@ -634,6 +608,8 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             GuardrailView: The updated Guardrail view object.
         """
         start_time = time.time()
+        status = STATUS_SUCCESS
+        error_type = None
         provider_name = request.guardrail_provider.name if request.guardrail_provider else DEFAULT_PROVIDER
         try:
             # Validate the update request
@@ -676,27 +652,13 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             await self.data_service.create_admin_audit(audit_log)
 
             guardrail_view.guardrail_provider_response = None
-            
-            # Success metrics
-            self.guardrail_operations_total.add(1, {
-                "operation": "update", 
-                "status": "success", 
-                "provider": provider_name,
-                "tenant_id": str(get_tenant_id())
-            })
-            
             return guardrail_view
             
         except Exception as e:
             # Error metrics with exception type
-            self.guardrail_operations_total.add(1, {
-                "operation": "update", 
-                "status": "error", 
-                "provider": provider_name,
-                "error_type": type(e).__name__,
-                "tenant_id": str(get_tenant_id())
-            })
-            raise
+            status = "error"
+            error_type = type(e).__name__
+            raise e
             
         finally:
             # Duration metrics
@@ -704,7 +666,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             self.guardrail_operation_duration.record(duration, {
                 "operation": "update", 
                 "provider": provider_name,
-                "tenant_id": str(get_tenant_id())
+                "tenant_id": get_tenant_id(),
+                "result": status,
+                "error_type": error_type
             })
 
     def is_record_updated(self, existing_guardrail: GuardrailView, request: GuardrailView):
@@ -808,6 +772,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         
         for provider, configs in guardrails_configs.items():
             start_time = time.time()
+            result = STATUS_SUCCESS
+            status_code = HTTPStatus.OK
+            error_type = None
             try:
                 delete_bedrock_guardrails_request = DeleteGuardrailRequest(
                     name=self.generate_guardrail_name(guardrail.name),
@@ -819,37 +786,33 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 delete_guardrail_map = {provider: delete_bedrock_guardrails_request}
                 provider_response = GuardrailProviderManager.delete_guardrail(delete_guardrail_map)
                 delete_guardrail_response.update(provider_response)
-                
-                # Success metrics for provider operation
-                self.provider_operations_total.add(1, {
-                    "provider": provider,
-                    "operation": "delete",
-                    "status": "success",
-                    "tenant_id": str(get_tenant_id())
-                })
+                self.handle_response_for_failure(provider_response[provider], 'delete')
+
+            except CustomException as ce:
+                result = "error"
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                error_type = ce.details["errorType"]
+                raise ce
                 
             except Exception as e:
                 # Error metrics with exception type
-                self.provider_operations_total.add(1, {
-                    "provider": provider,
-                    "operation": "delete", 
-                    "status": "error",
-                    "error_type": type(e).__name__,
-                    "tenant_id": str(get_tenant_id())
-                })
+                result = "error"
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                error_type = type(e).__name__
                 raise InternalServerError(f"Failed to delete guardrails for provider {provider}. Error - {e.__str__()}")
                 
             finally:
                 # Response time metrics for provider operation
                 duration = time.time() - start_time
-                self.provider_response_time.record(duration, {
-                    "provider": provider,
-                    "operation": "delete",
-                    "tenant_id": str(get_tenant_id())
+                self.http_outgoing_request.record(duration, {
+                    "http_method": "DELETE",
+                    "http_status_code": status_code,
+                    "http_target": f"/{provider}/guardrail",
+                    "target_service": provider,
+                    "tenant_id": get_tenant_id(),
+                    "result": result,
+                    "error_type": error_type
                 })
-
-        for provider, response in delete_guardrail_response.items():
-            self.handle_response_for_failure(provider, response, 'delete')
 
         return delete_guardrail_response
 
@@ -859,6 +822,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         
         for provider, configs in guardrails_configs.items():
             start_time = time.time()
+            result = STATUS_SUCCESS
+            status_code = HTTPStatus.OK
+            error_type = None
             try:
                 update_bedrock_guardrails_request = UpdateGuardrailRequest(
                     name=self.generate_guardrail_name(guardrail.name),
@@ -870,37 +836,33 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 update_guardrail_map = {provider: update_bedrock_guardrails_request}
                 provider_response = GuardrailProviderManager.update_guardrail(update_guardrail_map)
                 update_guardrail_response.update(provider_response)
-                
-                # Success metrics for provider operation
-                self.provider_operations_total.add(1, {
-                    "provider": provider,
-                    "operation": "update",
-                    "status": "success",
-                    "tenant_id": str(get_tenant_id())
-                })
+                self.handle_response_for_failure(provider_response[provider], 'update')
+
+            except CustomException as ce:
+                result = "error"
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                error_type = ce.details["errorType"]
+                raise ce
                 
             except Exception as e:
                 # Error metrics with exception type
-                self.provider_operations_total.add(1, {
-                    "provider": provider,
-                    "operation": "update", 
-                    "status": "error",
-                    "error_type": type(e).__name__,
-                    "tenant_id": str(get_tenant_id())
-                })
+                result = "error"
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                error_type = type(e).__name__
                 raise InternalServerError(f"Failed to update guardrails for provider {provider}. Error - {e.__str__()}")
                 
             finally:
                 # Response time metrics for provider operation
                 duration = time.time() - start_time
-                self.provider_response_time.record(duration, {
-                    "provider": provider,
-                    "operation": "update",
-                    "tenant_id": str(get_tenant_id())
+                self.http_outgoing_request.record(duration, {
+                    "http_method": "PUT",
+                    "http_status_code": status_code,
+                    "http_target": f"/{provider}/guardrail",
+                    "target_service": provider,
+                    "tenant_id": get_tenant_id(),
+                    "result": result,
+                    "error_type": error_type
                 })
-
-        for provider, response in update_guardrail_response.items():
-            self.handle_response_for_failure(provider, response, 'update')
 
         return update_guardrail_response
 
@@ -922,6 +884,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
         
         for provider, configs in guardrails_configs.items():
             start_time = time.time()
+            result = STATUS_SUCCESS
+            status_code = HTTPStatus.OK
+            error_type = None
             try:
                 create_bedrock_guardrails_request = CreateGuardrailRequest(
                     name=self.generate_guardrail_name(guardrail.name),
@@ -932,51 +897,37 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
                 create_guardrails_request_map = {provider: create_bedrock_guardrails_request}
                 provider_response = GuardrailProviderManager.create_guardrail(create_guardrails_request_map)
                 create_guardrail_response.update(provider_response)
-                
-                # Success metrics for provider operation
-                self.provider_operations_total.add(1, {
-                    "provider": provider,
-                    "operation": "create",
-                    "status": "success",
-                    "tenant_id": str(get_tenant_id())
-                })
+                self.handle_response_for_failure(provider_response[provider], 'create')
+
+            except CustomException as ce:
+                result = "error"
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                error_type = ce.details["errorType"]
+                raise ce
                 
             except Exception as e:
-                # Error metrics with exception type
-                self.provider_operations_total.add(1, {
-                    "provider": provider,
-                    "operation": "create", 
-                    "status": "error",
-                    "error_type": type(e).__name__,
-                    "tenant_id": str(get_tenant_id())
-                })
+                result = "error"
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                error_type = type(e).__name__
                 raise InternalServerError(f"Failed to create guardrails for provider {provider}. Error - {e.__str__()}")
                 
             finally:
                 # Response time metrics for provider operation
                 duration = time.time() - start_time
-                self.provider_response_time.record(duration, {
-                    "provider": provider,
-                    "operation": "create",
-                    "tenant_id": str(get_tenant_id())
+                self.http_outgoing_request.record(duration, {
+                    "http_method": "POST",
+                    "http_status_code": status_code,
+                    "http_target": f"/{provider}/guardrail",
+                    "target_service": provider,
+                    "tenant_id": get_tenant_id(),
+                    "result": result,
+                    "error_type": error_type
                 })
-
-        for provider, response in create_guardrail_response.items():
-            self.handle_response_for_failure(provider, response, 'create')
 
         return create_guardrail_response
 
-    def handle_response_for_failure(self, provider, response, operation='update'):
+    def handle_response_for_failure(self, response, operation='update'):
         if not response['success']:
-            # Track error metrics
-            error_type = response['response']['details'].get('errorType', 'unknown')
-            self.provider_errors_total.add(1, {
-                "provider": provider,
-                "operation": operation,
-                "error_type": error_type,
-                "tenant_id": str(get_tenant_id())
-            })
-            
             if (operation == 'delete' and 'errorType' in response['response']['details'] and
                     response['response']['details']['errorType'] == 'ResourceNotFoundException'):
                 return
@@ -1041,7 +992,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             id (int): The ID of the Guardrail to delete.
         """
         start_time = time.time()
-        provider_name =  DEFAULT_PROVIDER  # Default value, will be updated based on the guardrail
+        status = STATUS_SUCCESS
+        error_type = None
+        provider_name = DEFAULT_PROVIDER  # Default value, will be updated based on the guardrail
         
         try:
             await self.guardrail_request_validator.validate_delete_request(id)
@@ -1073,14 +1026,6 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             # log the audit
             audit_log = self.prepare_audit_log_object("DELETE", previous_guardrail=guardrail)
             await self.data_service.create_admin_audit(audit_log)
-            
-            # Success metrics
-            self.guardrail_operations_total.add(1, {
-                "operation": "delete", 
-                "status": "success", 
-                "provider": provider_name,
-                "tenant_id": str(get_tenant_id())
-            })
 
             # Decrement active guardrails count
             self.active_guardrails.add(-1, {
@@ -1090,14 +1035,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             
         except Exception as e:
             # Error metrics with exception type
-            self.guardrail_operations_total.add(1, {
-                "operation": "delete", 
-                "status": "error", 
-                "provider": provider_name,
-                "error_type": type(e).__name__,
-                "tenant_id": str(get_tenant_id())
-            })
-            raise
+            status = "error"
+            error_type = type(e).__name__
+            raise e
             
         finally:
             # Duration metrics
@@ -1105,7 +1045,9 @@ class GuardrailService(BaseController[GuardrailModel, GuardrailView]):
             self.guardrail_operation_duration.record(duration, {
                 "operation": "delete", 
                 "provider": provider_name,
-                "tenant_id": str(get_tenant_id())
+                "tenant_id": get_tenant_id(),
+                "result": status,
+                "error_type": error_type
             })
 
     async def get_history(self, id, filter: GRVersionHistoryFilter, page_number: int, size: int, sort: List[str]) -> Pageable:

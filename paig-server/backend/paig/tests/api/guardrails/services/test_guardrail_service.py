@@ -405,7 +405,7 @@ async def test_create_guardrail_when_guardrail_provider_gives_error(
     ) as mock_guardrail_get_by_name, patch.object(
         mock_guardrail_connection_service, 'get_all', return_value=[GRConnectionModel(**gr_connection_view.model_dump())]
     ) as mock_gr_connection_get_all, patch.object(
-        GuardrailProviderManager, 'create_guardrail', side_effect=InternalServerError("AWS Error")
+        GuardrailProviderManager, 'create_guardrail', side_effect=InternalServerError("AWS Error", {"details": "Token Expired", "errorType": "ClientError"})
     ) as mock_bedrock_guardrail_create):
         # Call the method under test
         with pytest.raises(InternalServerError) as exc_info:
@@ -417,7 +417,8 @@ async def test_create_guardrail_when_guardrail_provider_gives_error(
         assert mock_gr_connection_get_all.called
         assert mock_bedrock_guardrail_create.called
         assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to create guardrails for provider AWS. Error - AWS Error"
+        assert exc_info.value.message == "AWS Error"
+        assert exc_info.value.details == {"details": "Token Expired", "errorType": "ClientError"}
 
 
 @pytest.mark.asyncio
@@ -676,7 +677,7 @@ async def test_update_guardrail_when_guardrail_provider_gives_error(guardrail_se
     ) as mock_guardrail_get_by_name, patch.object(
         mock_guardrail_connection_service, 'get_all', return_value=[gr_connection_view]
     ) as mock_gr_connection_get_all, patch.object(
-        GuardrailProviderManager, 'update_guardrail', side_effect=InternalServerError("AWS Error")
+        GuardrailProviderManager, 'update_guardrail', side_effect=InternalServerError("AWS Error", {"details": "Token Expired", "errorType": "ClientError"})
     ) as mock_bedrock_guardrail_update):
         # Call the method under test
         with pytest.raises(InternalServerError) as exc_info:
@@ -684,7 +685,8 @@ async def test_update_guardrail_when_guardrail_provider_gives_error(guardrail_se
 
         # Assertions
         assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to update guardrails for provider AWS. Error - AWS Error"
+        assert exc_info.value.message == "AWS Error"
+        assert exc_info.value.details == {"details": "Token Expired", "errorType": "ClientError"}
         assert mock_get_record_by_id.called
         assert mock_guardrail_get_by_name.called
         assert mock_gr_connection_get_all.called
@@ -767,7 +769,7 @@ async def test_delete_guardrail_when_guardrail_provider_gives_error(
     ) as mock_get_record_by_id, patch.object(
         mock_guardrail_connection_service, 'get_all', return_value=[gr_connection_view]
     ) as mock_gr_connection_get_all, patch.object(
-        GuardrailProviderManager, 'delete_guardrail', side_effect=InternalServerError("AWS Error")
+        GuardrailProviderManager, 'delete_guardrail', side_effect=InternalServerError("AWS Error", {"details": "Token Expired", "errorType": "ClientError"})
     ) as mock_guardrail_provider_manager:
         # Call the method under test
         with pytest.raises(InternalServerError) as exc_info:
@@ -775,7 +777,8 @@ async def test_delete_guardrail_when_guardrail_provider_gives_error(
 
         # Assertions
         assert exc_info.type == InternalServerError
-        assert exc_info.value.message == "Failed to delete guardrails for provider AWS. Error - AWS Error"
+        assert exc_info.value.message == "AWS Error"
+        assert exc_info.value.details == {"details": "Token Expired", "errorType": "ClientError"}
         assert mock_get_record_by_id.called
         assert mock_guardrail_provider_manager.called
         assert mock_gr_connection_get_all.called
